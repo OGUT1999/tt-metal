@@ -52,6 +52,11 @@ struct Config {
         // logical region of both shards when a padded tensor's padding bytes differ; turn off only when replicas are
         // known to legitimately differ, in which case the first replica is the one written.
         bool verify_replicated_shards_on_dump = true;
+        // Debug: on every program cache hit, rebuild the workload through the op's factory and compare it with the
+        // cached one (kernels, compile-time args, defines, cores, circular buffers, semaphores). A mismatch means
+        // the op's program hash leaves out something the factory reads, and throws. Costs a full program build per
+        // hit (kernels stay in the JIT cache) and may allocate what the factory allocates; off by default.
+        bool verify_program_cache_hits = false;
     };
 
 private:

@@ -28,6 +28,7 @@
 #include <tt-metalium/experimental/program_preparation.hpp>
 #include <internal/graph_function_abort.hpp>
 #include <type_traits>
+#include "ttnn/config.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
@@ -275,11 +276,33 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
         program_factory);
 }
 
+// The mesh coordinates a new workload is built for: the whole mesh when every tensor is stored uniformly, otherwise
+// the coordinates the tensors occupy.
+template <typename tensor_args_t>
+ttnn::MeshCoordinateRangeSet compute_workload_coordinates(
+    const tensor_args_t& tensor_args, ttnn::MeshDevice* mesh_device) {
+    ttnn::MeshCoordinateRangeSet tensor_coords;
+    if (mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
+        // Fast path - a range covers the entire mesh.
+        tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device->shape()));
+    } else {
+        // Slow path - iterate over coordinates and merge them into a range set one by one.
+        log_warning(
+            tt::LogOp,
+            "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch performance.");
+        for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
+            tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
+        }
+    }
+    return tensor_coords;
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename UseWorkload>
 void handle_mesh_adapter_cache_hit(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
+    ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     const ProgramCacheKey& program_key,
     const UseWorkload& use_workload) {
@@ -299,6 +322,18 @@ void handle_mesh_adapter_cache_hit(
     dispatch_to_mesh_workload_factory<mesh_device_operation_t>(program_factory, [&]<typename WorkloadFactory>() {
         using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
         auto& cached_mesh_workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
+
+        if (ttnn::CONFIG.get<"verify_program_cache_hits">()) [[unlikely]] {
+            auto rebuilt = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
+                operation_attributes,
+                compute_workload_coordinates(tensor_args, mesh_device),
+                tensor_args,
+                tensor_return_value);
+            verify_cached_mesh_workload(
+                get_operation_name<mesh_device_operation_t>(operation_attributes),
+                cached_mesh_workload.workload,
+                rebuilt.workload);
+        }
 
         if (!graph_capture_blocks_dispatch()) {
             if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
@@ -328,27 +363,13 @@ void create_and_cache_mesh_workload(
 
     auto program_factory = mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args);
     auto program_factory_index = program_factory.index();
-    auto log_msg_func = [] {
-        log_warning(
-            tt::LogOp,
-            "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch performance.");
-    };
     // WorkloadFactory is unconstrained — dispatch_to_mesh_workload_factory resolves the type.
     dispatch_to_mesh_workload_factory<mesh_device_operation_t>(program_factory, [&]<typename WorkloadFactory>() {
-        ttnn::MeshCoordinateRangeSet tensor_coords;
-        if (mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
-            // Fast path - a range covers the entire mesh.
-            tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device->shape()));
-        } else {
-            // Slow path - iterate over coordinates and merge them into a range set one by one.
-            log_msg_func();  // Work around for g++12 compiler bug
-            for (const auto& coord :
-                 mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
-                tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
-            }
-        }
         auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
-            operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+            operation_attributes,
+            compute_workload_coordinates(tensor_args, mesh_device),
+            tensor_args,
+            tensor_return_value);
         // Cached only after this use returns, so a use that throws leaves the cache unchanged.
         use_workload(cached_workload.workload);
 
@@ -432,7 +453,13 @@ void use_mesh_workload(
     auto& program_cache = mesh_device->get_program_cache();
     if (lookup.hit) {
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
-            operation_attributes, tensor_args, tensor_return_value, program_cache, lookup.key, use_workload);
+            operation_attributes,
+            tensor_args,
+            tensor_return_value,
+            mesh_device,
+            program_cache,
+            lookup.key,
+            use_workload);
     } else if (tt::tt_metal::trace_allocation_tracking_enabled()) [[unlikely]] {
         create_and_cache_mesh_workload_with_allocation_context<mesh_device_operation_t>(
             operation_attributes,
