@@ -3,6 +3,7 @@
 
 set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_reflect.cpp
+    test_dynamic_length.cpp
     sdpa/test_ring_joint_ksplit.cpp
     sdpa/test_ring_mla_packing_plan.cpp
     sdpa/test_sliding_window_work_plan.cpp
