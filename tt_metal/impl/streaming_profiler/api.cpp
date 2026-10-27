@@ -277,7 +277,7 @@ constexpr uint64_t alternatives_key(uint32_t id, uint32_t type) { return uint64_
 }  // namespace
 
 RecordRoutes::RecordRoutes(std::vector<api::detail::Kind> kinds) :
-    kinds_(std::move(kinds)), routes_(TT_ZONE_ID_COUNT), short_run_types_(TT_ZONE_ID_COUNT) {
+    kinds_(std::move(kinds)), routes_(TT_CALL_SITE_ID_COUNT), short_run_types_(TT_CALL_SITE_ID_COUNT) {
     for (size_t type = 0; type < kinds_.size(); type++) {
         std::optional<std::vector<uint32_t>> direct = direct_offsets(kinds_[type]);
         strides_[type] = direct ? static_cast<uint32_t>(kinds_[type].size) : profiler::kSpscPublishedBytes;
@@ -435,7 +435,7 @@ void detail::visit_stretches(
     visit_stretch();
 }
 
-std::atomic<const void*> detail::site_metadata[TT_ZONE_ID_COUNT];
+std::atomic<const void*> detail::site_metadata[TT_CALL_SITE_ID_COUNT];
 
 const void* detail::build_site_metadata(uint32_t id, const void* (*build)(FieldReader& fields)) {
     static std::mutex building;
