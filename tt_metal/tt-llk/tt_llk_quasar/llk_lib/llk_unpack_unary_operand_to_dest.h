@@ -23,9 +23,7 @@ using namespace ckernel::trisc;
  *
  * @note Call once per program before the first @ref _llk_unpack_unary_operand_to_dest_init_, never from a per-op init: op writers may
  *       re-run the per-op init inside their tile loop, and a reset there would pin unpack to bank 0 while pack keeps
- *       alternating banks. Pair with @ref _llk_math_pack_sync_init_ (T1) and @ref _llk_pack_dest_init_ (T2). The one
- *       exception is the unpack_to_dest compatibility arm of @ref _llk_unpack_unary_operand_init_, which keeps the per-init
- *       reset its unported callers rely on.
+ *       alternating banks. Pair with @ref _llk_math_pack_sync_init_ (T1) and @ref _llk_pack_dest_init_ (T2).
  */
 inline void _llk_unpack_dest_init_()
 {
@@ -85,12 +83,9 @@ inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t bu
  * @brief Initializes the unpacker to unpack a single operand directly into the math DEST register, synchronized with
  *        math and pack through the UNPACK_PACK / UNPACK_MATH / MATH_PACK semaphores.
  *
- * Unpack-to-dest counterpart of @ref _llk_unpack_unary_operand_init_ (llk_unpack_unary_operand.h). The two families are
- * independent: this one owns its MOP (@ref _llk_unpack_unary_operand_to_dest_mop_config_) and its DEST handshake is the
- * semaphore protocol of the section calls rather than dest-dvalid. The unpack_to_dest = true arm of the unary operand
- * family is a compatibility path for callers not yet ported (the tt-llk test infra and fuser): it keeps that family's
- * init-sized MOP and brackets one @ref _llk_unpack_unary_operand_to_dest_tile_ run with the section handshake itself;
- * new callers use this family directly.
+ * Unpack-to-dest counterpart of @ref _llk_unpack_unary_operand_init_ (llk_unpack_unary_operand.h), which only unpacks to
+ * SrcA / SrcB. The two families are independent: this one owns its MOP (@ref _llk_unpack_unary_operand_to_dest_mop_config_)
+ * and its DEST handshake is the semaphore protocol of the section calls.
  *
  * Per-op init: programs the transpose config and the MOP only. It does not touch the DEST bank tracking, so it is
  * safe to call inside a tile loop; the once-per-program bank reset lives in @ref _llk_unpack_dest_init_.

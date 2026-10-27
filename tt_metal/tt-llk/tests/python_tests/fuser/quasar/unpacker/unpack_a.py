@@ -14,6 +14,7 @@ from fuser.l1_operation import L1Operation
 from fuser.operand import BfdResource
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     EltwiseBinaryReuseDestType,
 )
 
@@ -37,11 +38,15 @@ def upk_to_dest_math_ack() -> str:
 
 
 def _unp_sel(compute_unit: FpuNode) -> str:
-    if compute_unit.unpack_to_dest.value:
-        return "p_unpacr::UNP_DEST"
     if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
         return "p_unpacr::UNP_B"
     return "p_unpacr::UNP_A"
+
+
+def _num_tiles(compute_unit: FpuNode, block: BlockData):
+    if compute_unit.reuse_dest != EltwiseBinaryReuseDestType.NONE:
+        return 1
+    return block.block_cols
 
 
 class UnpackerA(Unpacker):
@@ -61,6 +66,7 @@ class UnpackerA(Unpacker):
         return [
             "llk_unpack_common.h",
             "llk_unpack_unary_operand.h",
+            "llk_unpack_unary_operand_to_dest.h",
             "llk_math_common.h",
         ]
 
@@ -113,20 +119,28 @@ class UnpackerA(Unpacker):
             if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA
             else BfdResource.UNP0
         )
+        bfd_alloc = compute_unit.src_a.bfd_alloc_and_program(
+            engine, result_name="bfd_id"
+        )
+        if compute_unit.unpack_to_dest.value:
+            # Unpack owns the DEST bank tracking in this path; it is reset on every init.
+            return (
+                "{\n" + bfd_alloc + "_llk_unpack_dest_init_();\n"
+                "_llk_unpack_unary_operand_to_dest_init_(bfd_id);\n"
+                "}\n"
+            )
+
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
-        unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         transpose_en = compute_unit.transpose_faces.cpp_enum_value
         unp_sel = _unp_sel(compute_unit)
-        per_tile = compute_unit.reuse_dest != EltwiseBinaryReuseDestType.NONE
-        num_tiles = 1 if per_tile else block.block_cols
 
         return (
             "{\n"
-            + compute_unit.src_a.bfd_alloc_and_program(engine, result_name="bfd_id")
-            + f"_llk_unpack_unary_operand_init_<{unp_sel}, {transpose_en}, {en_32bit_dest}, {reuse_dest}, {unpack_to_dest}>"
-            f"(bfd_id, {tensor_shape}, {num_tiles});\n"
+            + bfd_alloc
+            + f"_llk_unpack_unary_operand_init_<{unp_sel}, {transpose_en}, {en_32bit_dest}, {reuse_dest}>"
+            f"(bfd_id, {tensor_shape}, {_num_tiles(compute_unit, block)});\n"
             "}\n"
         )
 
@@ -137,14 +151,23 @@ class UnpackerA(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
+        if compute_unit.unpack_to_dest.value:
+            # One DEST section per call, at DEST tile 0. 32-bit DEST is pinned for the SyncHalf bank flip.
+            code = (
+                "_llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK, semaphore::UNPACK_MATH);\n"
+                f"_llk_unpack_unary_operand_to_dest_block_({block.tile_id_src_a}, 0, {_num_tiles(compute_unit, block)});\n"
+                "_llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);\n"
+            )
+            if operation.dest_sync == DestSync.Half:
+                code += "_llk_sync_advance_dest_section_<ckernel::to_underlying(ckernel::trisc::TriscID::Unpack), true, p_stall::UNPACK0>();\n"
+            return code
+
         unp_sel = _unp_sel(compute_unit)
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
-        unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
-        dest_sync = operation.dest_sync.cpp_enum_value
 
         return (
-            f"_llk_unpack_unary_operand_<{unp_sel}, {reuse_dest}, {unpack_to_dest}, {dest_sync}>"
+            f"_llk_unpack_unary_operand_<{unp_sel}, {reuse_dest}>"
             f"({block.tile_id_src_a}, {tensor_shape});\n"
         )
 
