@@ -123,7 +123,9 @@ class UnpackerA(Unpacker):
             engine, result_name="bfd_id"
         )
         if compute_unit.unpack_to_dest.value:
-            # Unpack owns the DEST bank tracking in this path; it is reset on every init.
+            # Resets unpack's DEST bank on every init, i.e. per block (per_block_init), as the
+            # removed unpack_to_dest arm did, not once per program as the to-dest family asks.
+            # Safe only while each block starts on bank 0: every current config is one block.
             return (
                 "{\n" + bfd_alloc + "_llk_unpack_dest_init_();\n"
                 "_llk_unpack_unary_operand_to_dest_init_(bfd_id);\n"
@@ -155,11 +157,11 @@ class UnpackerA(Unpacker):
             # One DEST section per call, at DEST tile 0. 32-bit DEST is pinned for the SyncHalf bank flip.
             code = (
                 "_llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK, semaphore::UNPACK_MATH);\n"
-                f"_llk_unpack_unary_operand_to_dest_block_({block.tile_id_src_a}, 0, {_num_tiles(compute_unit, block)});\n"
+                f"_llk_unpack_unary_operand_to_dest_block_({block.tile_id_src_a}, 0 /*dst_tile_idx*/, {_num_tiles(compute_unit, block)});\n"
                 "_llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);\n"
             )
             if operation.dest_sync == DestSync.Half:
-                code += "_llk_sync_advance_dest_section_<ckernel::to_underlying(ckernel::trisc::TriscID::Unpack), true, p_stall::UNPACK0>();\n"
+                code += "_llk_sync_advance_dest_section_<ckernel::to_underlying(ckernel::trisc::TriscID::Unpack), true /*EN_32BIT_DEST*/, p_stall::UNPACK0>();\n"
             return code
 
         unp_sel = _unp_sel(compute_unit)
