@@ -10,7 +10,8 @@
 //     DevicePublish<Name{"x"_s}>(Bf16{bits}, count);  // an argument can be a struct too
 //     DevicePublish<Name{"y"_s}, kPublishImmediately>(count);  // options follow the metadata
 //     DevicePublish<kPublishImmediately>(count);  // or stand alone when there is none
-//     DevicePublish<Name{"z"_s}, kNoInline>(count);  // only a call here, even when the profiler is inlined
+//     DevicePublish<Name{"z"_s}, kSendToExternalProcess>(count);  // the external process gets it too
+//     DevicePublish<Name{"w"_s}, kNoInline>(count);  // only a call here, even when the profiler is inlined
 //
 // Payload and metadata fields, and arguments, use fixed-width types: int8_t to int64_t, uint8_t to uint64_t, char,
 // float, double, bool, enums with one of those as their underlying type, in metadata, String for text, and in a
