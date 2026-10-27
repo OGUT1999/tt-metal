@@ -77,15 +77,12 @@ private:
     std::map<std::string, std::vector<uint16_t>, std::less<>> host_;
 };
 
-// The stall call site, which kernel_profiler::write_pending_stall() writes without an entry in any ELF: a zone named
-// STALL_ZONE_NAME whose records all take the medium form, its end the record's time and its start a 32-bit distance
-// before its end.
+// The stall call site, which kernel_profiler::write_pending_stall() writes without a descriptor in any ELF: a Stall,
+// whose records all take the medium form, its end the record's time and its start a 32-bit distance before its end.
 CallSite make_stall_site() {
     return {
-        .metadata_type = spd::type_name<sp::ZoneMetadata>,
+        .metadata_type = spd::type_name<sp::StallMetadata>,
         .payload_codes = {spd::kTimestampCode, spd::kTimestampCode},
-        .metadata_codes = {spd::kStringCode},
-        .metadata_bits = {{0, 64}},
         .arguments = {{.type = spd::type_name<sp::Interval>, .first_field = 0, .field_bits = {{0, 64}, {64, 64}}}},
         .argument_field_counts = {2},
         .packet_layouts =
@@ -93,8 +90,7 @@ CallSite make_stall_site() {
               .body_words = kernel_profiler::ppfmt::STALL_BODY_WORDS,
               .payload_bits = {{0, 32}, {0, 0}}}},
         .timestamps_as_distances = true,
-        .payload_publish_time_field = 1,
-        .metadata = {sp::STALL_ZONE_NAME}};
+        .payload_publish_time_field = 1};
 }
 
 struct Registry {
